@@ -1,1 +1,24 @@
+name: keep-streamlit-awake
 
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # alle 6 Stunden
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping all Streamlit apps
+        run: |
+          for u in \
+            https://solarspitzengesetz-rechner.streamlit.app \
+            https://evo-rechner.streamlit.app \
+            https://atnnschwellenrechnersimpel.streamlit.app \
+            https://pv-profil-generator.streamlit.app \
+            https://schwellenwert-rechner-atypische-netznutzung.streamlit.app \
+            https://temperatur-stunden.streamlit.app
+          do
+            echo "Pinging $u"
+            curl -Is "$u" || true
+          done
