@@ -13,6 +13,7 @@ jobs:
         run: |
           for u in \
             https://solarspitzengesetz-rechner.streamlit.app \
+            https://wandlermesser.streamlit.app \
             https://evo-rechner.streamlit.app \
             https://atnnschwellenrechnersimpel.streamlit.app \
             https://pv-profil-generator.streamlit.app \
