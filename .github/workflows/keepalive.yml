@@ -2,24 +2,50 @@ name: keep-streamlit-awake
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # alle 6 Stunden
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping all Streamlit apps
+      - name: Curl all Streamlit apps with real GET
         run: |
-          for u in \
-            https://solarspitzengesetz-rechner.streamlit.app \
-            https://wandlermesser.streamlit.app \
-            https://evo-rechner.streamlit.app \
-            https://atnnschwellenrechnersimpel.streamlit.app \
-            https://pv-profil-generator.streamlit.app \
-            https://schwellenwert-rechner-atypische-netznutzung.streamlit.app \
-            https://temperatur-stunden.streamlit.app
-          do
-            echo "Pinging $u"
-            curl -Is "$u" || true
+          UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+          URLS=(
+            "https://solarspitzengesetz-rechner.streamlit.app"
+            "https://evo-rechner.streamlit.app"
+            "https://atnnschwellenrechnersimpel.streamlit.app"
+            "https://pv-profil-generator.streamlit.app"
+            "https://schwellenwert-rechner-atypische-netznutzung.streamlit.app"
+            "https://temperatur-stunden.streamlit.app"
+            "https://wandlermesser.streamlit.app"
+          )
+
+          for u in "${URLS[@]}"; do
+            echo "GET $u"
+            # 1. Hauptseite abrufen
+            code=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -L \
+              -A "$UA" \
+              -H "Cache-Control: no-cache" \
+              -H "Pragma: no-cache" \
+              --retry 3 --retry-delay 5 --retry-connrefused \
+              --max-time 25 \
+              "$u/?keepalive=$(date +%s)")
+            echo "Status $code"
+
+            # 2. nach kurzer Pause nochmal anstupsen
+            sleep 8
+            code2=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -L \
+              -A "$UA" \
+              -H "Cache-Control: no-cache" \
+              --max-time 20 \
+              "$u/")
+            echo "Second touch $code2"
+
+            # nie fehlschlagen
+            true
+            echo "----"
           done
