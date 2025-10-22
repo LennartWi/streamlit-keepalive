@@ -2,16 +2,19 @@ name: keep-streamlit-awake
 
 on:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "0 */3 * * *"    # alle 3 Stunden
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Curl all Streamlit apps with real GET
+      - name: GET each app once (no auto redirect), accept 2xx/3xx as OK
+        shell: bash
         run: |
+          set -u  # kein set -e, damit Fehler den Job nicht killen
           UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+
           URLS=(
             "https://solarspitzengesetz-rechner.streamlit.app"
             "https://evo-rechner.streamlit.app"
@@ -22,30 +25,30 @@ jobs:
             "https://wandlermesser.streamlit.app"
           )
 
-          for u in "${URLS[@]}"; do
-            echo "GET $u"
-            # 1. Hauptseite abrufen
+          for base in "${URLS[@]}"; do
+            # 1) Erstes „echtes“ GET auf die Embed-Ansicht (vermeidet oft Redirect-Schleifen)
+            url="${base}/?embed=true&keepalive=$(date +%s)"
+            echo "GET $url"
             code=$(curl -sS -o /dev/null -w "%{http_code}" \
-              -L \
+              --http1.1 \
               -A "$UA" \
               -H "Cache-Control: no-cache" \
               -H "Pragma: no-cache" \
-              --retry 3 --retry-delay 5 --retry-connrefused \
               --max-time 25 \
-              "$u/?keepalive=$(date +%s)")
-            echo "Status $code"
+              "$url" || echo "000")
+            echo "Status: $code"
 
-            # 2. nach kurzer Pause nochmal anstupsen
-            sleep 8
-            code2=$(curl -sS -o /dev/null -w "%{http_code}" \
-              -L \
-              -A "$UA" \
-              -H "Cache-Control: no-cache" \
-              --max-time 20 \
-              "$u/")
-            echo "Second touch $code2"
+            # 2) Wenn 3xx, noch ein kurzer „touch“ auf die Basis-URL (ohne -L, kein Loop)
+            if [[ "$code" =~ ^3[0-9][0-9]$ ]]; then
+              sleep 5
+              echo "Second touch ${base}/"
+              code2=$(curl -sS -o /dev/null -w "%{http_code}" \
+                --http1.1 \
+                -A "$UA" \
+                --max-time 20 \
+                "${base}/" || echo "000")
+              echo "Second status: $code2"
+            fi
 
-            # nie fehlschlagen
-            true
             echo "----"
           done
