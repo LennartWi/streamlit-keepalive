@@ -1,54 +1,78 @@
-name: keep-streamlit-awake
+name: keep-streamlit-awake-browser
 
 on:
   schedule:
-    - cron: "0 */3 * * *"    # alle 3 Stunden
+    - cron: "7 * * * *"     # stündlich, leicht versetzt
   workflow_dispatch:
 
 jobs:
-  ping:
+  wake:
     runs-on: ubuntu-latest
     steps:
-      - name: GET each app once (no auto redirect), accept 2xx/3xx as OK
-        shell: bash
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright
         run: |
-          set -u  # kein set -e, damit Fehler den Job nicht killen
-          UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+          npm init -y
+          npm install playwright@1
+          npx playwright install --with-deps chromium
 
-          URLS=(
-            "https://solarspitzengesetz-rechner.streamlit.app"
-            "https://evo-rechner.streamlit.app"
-            "https://atnnschwellenrechnersimpel.streamlit.app"
-            "https://pv-profil-generator.streamlit.app"
-            "https://schwellenwert-rechner-atypische-netznutzung.streamlit.app"
-            "https://temperatur-stunden.streamlit.app"
+      - name: Create wake script
+        run: |
+          cat > wake.mjs << 'EOF'
+          import { chromium } from "playwright";
+          const urls = [
+            "https://solarspitzengesetz-rechner.streamlit.app",
+            "https://evo-rechner.streamlit.app",
+            "https://atnnschwellenrechnersimpel.streamlit.app",
+            "https://pv-profil-generator.streamlit.app",
+            "https://schwellenwert-rechner-atypische-netznutzung.streamlit.app",
+            "https://temperatur-stunden.streamlit.app",
             "https://wandlermesser.streamlit.app"
-          )
+          ];
 
-          for base in "${URLS[@]}"; do
-            # 1) Erstes „echtes“ GET auf die Embed-Ansicht (vermeidet oft Redirect-Schleifen)
-            url="${base}/?embed=true&keepalive=$(date +%s)"
-            echo "GET $url"
-            code=$(curl -sS -o /dev/null -w "%{http_code}" \
-              --http1.1 \
-              -A "$UA" \
-              -H "Cache-Control: no-cache" \
-              -H "Pragma: no-cache" \
-              --max-time 25 \
-              "$url" || echo "000")
-            echo "Status: $code"
+          const ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
 
-            # 2) Wenn 3xx, noch ein kurzer „touch“ auf die Basis-URL (ohne -L, kein Loop)
-            if [[ "$code" =~ ^3[0-9][0-9]$ ]]; then
-              sleep 5
-              echo "Second touch ${base}/"
-              code2=$(curl -sS -o /dev/null -w "%{http_code}" \
-                --http1.1 \
-                -A "$UA" \
-                --max-time 20 \
-                "${base}/" || echo "000")
-              echo "Second status: $code2"
-            fi
+          const timeoutMs = 30000;        // pro Seite
+          const settleMs  = 6000;         // kurze Wartezeit nach Netz idle
 
-            echo "----"
-          done
+          const run = async () => {
+            const browser = await chromium.launch({
+              headless: true,
+              args: ["--no-sandbox","--disable-dev-shm-usage"]
+            });
+            const context = await browser.newContext({
+              userAgent: ua,
+              viewport: { width: 1366, height: 768 },
+              javaScriptEnabled: true
+            });
+
+            for (const base of urls) {
+              const url = `${base}/?embed=true&keepalive=${Date.now()}`;
+              const page = await context.newPage();
+              console.log(`Wake ${url}`);
+              try {
+                await page.goto(url, { waitUntil: "networkidle", timeout: timeoutMs });
+                await page.waitForTimeout(settleMs);
+                // kleiner zweiter Touch auf die Basis URL
+                await page.goto(base + "/", { waitUntil: "domcontentloaded", timeout: timeoutMs });
+                await page.waitForTimeout(1500);
+                console.log(`OK ${base}`);
+              } catch (e) {
+                console.log(`WARN ${base}: ${e.message}`);
+              } finally {
+                await page.close();
+              }
+            }
+            await context.close();
+            await browser.close();
+          };
+
+          run();
+          EOF
+
+      - name: Run wake script
+        run: node wake.mjs
