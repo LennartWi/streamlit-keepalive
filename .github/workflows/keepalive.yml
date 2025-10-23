@@ -1,12 +1,12 @@
-name: keep-streamlit-awake-browser
+name: keep-and-wake-streamlit
 
 on:
   schedule:
-    - cron: "7,37 * * * *"   # alle 30 Minuten mit Versatz
+    - cron: "11 */8 * * *"     # alle 8 Stunden, leicht versetzt
   workflow_dispatch:
 
 jobs:
-  wake:
+  keep_and_wake:
     runs-on: ubuntu-latest
     steps:
       - name: Install Node
@@ -20,12 +20,12 @@ jobs:
           npm install playwright@1
           npx playwright install --with-deps chromium
 
-      - name: Create wake script
+      - name: Create script
         run: |
           cat > wake.mjs << 'EOF'
           import { chromium } from "playwright";
 
-          const urls = [
+          const URLS = [
             "https://solarspitzengesetz-rechner.streamlit.app",
             "https://evo-rechner.streamlit.app",
             "https://atnnschwellenrechnersimpel.streamlit.app",
@@ -35,8 +35,9 @@ jobs:
             "https://wandlermesser.streamlit.app"
           ];
 
-          const ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
-          const pageTimeout = 45000;
+          const UA =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+          const PAGE_TIMEOUT = 45000;
 
           const run = async () => {
             const browser = await chromium.launch({
@@ -44,46 +45,58 @@ jobs:
               args: ["--no-sandbox","--disable-dev-shm-usage"]
             });
             const context = await browser.newContext({
-              userAgent: ua,
+              userAgent: UA,
               viewport: { width: 1366, height: 850 },
               javaScriptEnabled: true
             });
 
-            for (const base of urls) {
+            for (const base of URLS) {
               const page = await context.newPage();
               const url = `${base}/?embed=true&keepalive=${Date.now()}`;
-              console.log(`Wake ${base}`);
+              console.log(`▶ ${base}`);
 
               try {
-                // Seite laden bis Netz ruhig
-                await page.goto(url, { waitUntil: "networkidle", timeout: pageTimeout });
+                // 1) Präventiv "echter Besuch"
+                await page.goto(url, { waitUntil: "networkidle", timeout: PAGE_TIMEOUT });
 
-                // Warten bis das Streamlit DOM vorhanden ist
-                // Kennzeichnendes Root Element
-                await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout: 15000 });
+                // Prüfen ob App schon gerendert ist
+                const rendered = await page.$('[data-testid="stAppViewContainer"]');
+                if (rendered) {
+                  console.log("  OK: rendered");
+                } else {
+                  // 2) Schlafseite erkannt? Button klicken
+                  const sleeping =
+                    (await page.locator('text=Zzzz').first().count()) > 0 ||
+                    (await page.locator('text=This app has gone to sleep').first().count()) > 0 ||
+                    (await page.locator('text=Yes, get this app back up!').first().count()) > 0;
 
-                // Optional die interne Health Route anfragen
-                const health = await page.evaluate(async () => {
-                  try {
-                    const r = await fetch("/_stcore/health");
-                    return `${r.status}`;
-                  } catch {
-                    return "fetch-failed";
+                  if (sleeping) {
+                    console.log("  Sleep page detected → clicking wake button");
+                    const btn =
+                      page.getByRole?.("button", { name: /get this app back up/i }) ||
+                      page.locator('text=Yes, get this app back up!');
+
+                    try {
+                      await btn.first().click({ timeout: 10000 });
+                    } catch {
+                      // Fallback: drücke Enter, falls Button im Fokus ist
+                      await page.keyboard.press("Enter").catch(() => {});
+                    }
+
+                    // Warten bis die App anfängt zu rendern
+                    await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout: 60000 });
+                    console.log("  WOKE: app container visible");
+                  } else {
+                    console.log("  No container yet but not a sleep page");
                   }
-                });
-                console.log(`Health ${base}: ${health}`);
+                }
 
-                // Sicherstellen, dass eine Websocket Verbindung versucht wurde
-                // Beobachte kurz Netzwerkaktivitaet
-                await page.waitForTimeout(4000);
-
-                // Zweiter kurzer Touch auf die Basis
-                await page.goto(base + "/", { waitUntil: "domcontentloaded", timeout: pageTimeout });
+                // kleiner zweiter Touch auf Basis URL
+                await page.goto(base + "/", { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT });
                 await page.waitForTimeout(1500);
-
-                console.log(`OK ${base}`);
+                console.log("  Touch done");
               } catch (e) {
-                console.log(`WARN ${base}: ${e.message}`);
+                console.log(`  WARN: ${e.message}`);
               } finally {
                 await page.close();
               }
@@ -96,5 +109,5 @@ jobs:
           run();
           EOF
 
-      - name: Run wake script
+      - name: Run
         run: node wake.mjs
