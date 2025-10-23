@@ -2,7 +2,7 @@ name: keep-streamlit-awake-browser
 
 on:
   schedule:
-    - cron: "7 * * * *"     # stündlich, leicht versetzt
+    - cron: "7,37 * * * *"   # alle 30 Minuten mit Versatz
   workflow_dispatch:
 
 jobs:
@@ -24,6 +24,7 @@ jobs:
         run: |
           cat > wake.mjs << 'EOF'
           import { chromium } from "playwright";
+
           const urls = [
             "https://solarspitzengesetz-rechner.streamlit.app",
             "https://evo-rechner.streamlit.app",
@@ -35,9 +36,7 @@ jobs:
           ];
 
           const ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
-
-          const timeoutMs = 30000;        // pro Seite
-          const settleMs  = 6000;         // kurze Wartezeit nach Netz idle
+          const pageTimeout = 45000;
 
           const run = async () => {
             const browser = await chromium.launch({
@@ -46,20 +45,42 @@ jobs:
             });
             const context = await browser.newContext({
               userAgent: ua,
-              viewport: { width: 1366, height: 768 },
+              viewport: { width: 1366, height: 850 },
               javaScriptEnabled: true
             });
 
             for (const base of urls) {
-              const url = `${base}/?embed=true&keepalive=${Date.now()}`;
               const page = await context.newPage();
-              console.log(`Wake ${url}`);
+              const url = `${base}/?embed=true&keepalive=${Date.now()}`;
+              console.log(`Wake ${base}`);
+
               try {
-                await page.goto(url, { waitUntil: "networkidle", timeout: timeoutMs });
-                await page.waitForTimeout(settleMs);
-                // kleiner zweiter Touch auf die Basis URL
-                await page.goto(base + "/", { waitUntil: "domcontentloaded", timeout: timeoutMs });
+                // Seite laden bis Netz ruhig
+                await page.goto(url, { waitUntil: "networkidle", timeout: pageTimeout });
+
+                // Warten bis das Streamlit DOM vorhanden ist
+                // Kennzeichnendes Root Element
+                await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout: 15000 });
+
+                // Optional die interne Health Route anfragen
+                const health = await page.evaluate(async () => {
+                  try {
+                    const r = await fetch("/_stcore/health");
+                    return `${r.status}`;
+                  } catch {
+                    return "fetch-failed";
+                  }
+                });
+                console.log(`Health ${base}: ${health}`);
+
+                // Sicherstellen, dass eine Websocket Verbindung versucht wurde
+                // Beobachte kurz Netzwerkaktivitaet
+                await page.waitForTimeout(4000);
+
+                // Zweiter kurzer Touch auf die Basis
+                await page.goto(base + "/", { waitUntil: "domcontentloaded", timeout: pageTimeout });
                 await page.waitForTimeout(1500);
+
                 console.log(`OK ${base}`);
               } catch (e) {
                 console.log(`WARN ${base}: ${e.message}`);
@@ -67,6 +88,7 @@ jobs:
                 await page.close();
               }
             }
+
             await context.close();
             await browser.close();
           };
