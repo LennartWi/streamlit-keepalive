@@ -32,7 +32,8 @@ jobs:
             "https://pv-profil-generator.streamlit.app",
             "https://schwellenwert-rechner-atypische-netznutzung.streamlit.app",
             "https://temperatur-stunden.streamlit.app",
-            "https://wandlermesser.streamlit.app"
+            "https://wandlermesser.streamlit.app",
+            "https://2500h-regel-rechner.streamlit.app"
           ];
 
           const UA =
